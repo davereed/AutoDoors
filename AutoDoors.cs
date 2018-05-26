@@ -23,7 +23,6 @@ namespace Oxide.Plugins
 
         readonly DynamicConfigFile dataFile = Interface.Oxide.DataFileSystem.GetFile("AutoDoors");
         Dictionary<string, int> playerPrefs = new Dictionary<string, int>();
-        Dictionary<string, int> playerPrefsHatches = new Dictionary<string, int>();
         Dictionary<uint, Timer> trackedTimers = new Dictionary<uint, Timer>();
         const string permAuto = "autodoors.allowed";
 
@@ -65,13 +64,10 @@ namespace Oxide.Plugins
         {
             lang.RegisterMessages(new Dictionary<string, string>
             {
-                ["NotAllowed"] = "You are not allowed to use the '{0}' command",
                 ["DelayDisabled"] = "Automatic door closing is now disabled",
-                ["DelaySet"] = "Automatic door closing delay set to {0}s",                
-                ["Usage"] = "/{0} to disable automatic doors\n /{0} # (a number between 5 and 30)",
-                ["DelayDisabledHatches"] = "Automatic hatch closing is now disabled",
-                ["DelaySetHatches"] = "Automatic hatch closing delay set to {0}s",                
-                ["UsageHatches"] = "/{0} to disable automatic hatches\n /{0} # (a number between 5 and 30)"
+                ["DelaySet"] = "Automatic door closing delay set to {0}s",
+                ["NotAllowed"] = "You are not allowed to use the '{0}' command",
+                ["Usage"] = "/{0} to disable automatic doors\n /{0} # (a number between 5 and 30)"
             }, this);
         }
 
@@ -101,30 +97,6 @@ namespace Oxide.Plugins
             dataFile.WriteObject(playerPrefs);
 
             player.Reply(time == 0 ? Lang("DelayDisabled", player.Id, time) : Lang("DelaySet", player.Id, time));
-        }
-
-        [Command("ah", "autohatch", "autohatches")]
-        void ChatCommandHatches(IPlayer player, string command, string[] args)
-        {
-            if (usePermissions && !IsAllowed(player.Id, permAuto))
-            {
-                player.Reply(Lang("NotAllowed", player.Id, command));
-                return;
-            }
-
-            int time;
-            if (args == null || args.Length != 1 || !int.TryParse(args[0], out time)) time = 0;
-
-            if (time > maximumDelay || time < minimumDelay && time != 0)
-            {
-                player.Reply(Lang("UsageHatches", player.Id, command));
-                return;
-            }
-
-            playerPrefsHatches[player.Id] = time;
-            dataFile.WriteObject(playerPrefsHatches);
-
-            player.Reply(time == 0 ? Lang("DelayDisabledHatches", player.Id, time) : Lang("DelaySetHatches", player.Id, time));
         }
 
         #endregion
@@ -199,26 +171,21 @@ namespace Oxide.Plugins
 
             if (door == null || !door.IsOpen() || door.OwnerID == 0 || door.LookupPrefab().name.Contains("shutter")) return;
             if (usePermissions && !IsAllowed(player.UserIDString, permAuto)) return;
+            
             int time;
+            if (!playerPrefs.TryGetValue(player.UserIDString, out time)) time = defaultDelay;
+            if (time == 0) return;
 
             if(door.LookupPrefab().name.Contains("floor.ladder.hatch")) {
-               if (!playerPrefsHatches.TryGetValue(player.UserIDString, out time)) time = defaultDelay;
-               if (time == 0) return;
+                trackedTimers[door.net.ID] = timer.Repeat(time, 1, () => {
+                    if (!door || !door.IsOpen()) return;
+                    if (cancelOnKill && player.IsDead()) return;
 
-               trackedTimers[door.net.ID] = timer.Repeat(time, 1, () =>
-               {
-                 if (!door || !door.IsOpen()) return;
-                 if (cancelOnKill && player.IsDead()) return;
-
-                 door.SetFlag(BaseEntity.Flags.Open, false);
-                 door.SendNetworkUpdateImmediate();
-             }
-             );
+                    door.SetFlag(BaseEntity.Flags.Open, false);
+                    door.SendNetworkUpdateImmediate();
+                });
            }
            else {
-               if (!playerPrefs.TryGetValue(player.UserIDString, out time)) time = defaultDelay;
-               if (time == 0) return;
-
                timer.Once(time, () =>
                {
                    if (!door || !door.IsOpen()) return;
@@ -226,14 +193,17 @@ namespace Oxide.Plugins
 
                    door.SetFlag(BaseEntity.Flags.Open, false);
                    door.SendNetworkUpdateImmediate();
-                   });
+                });
            }
 
         }
         void OnDoorClosed(Door door, BasePlayer player)
         {
             if(door.LookupPrefab().name.Contains("floor.ladder.hatch")) {
-                trackedTimers[door.net.ID].Destroy();
+                Timer hatchTimer;
+                if(trackedTimers.TryGetValue(door.net.ID, out hatchTimer)) {
+                    hatchTimer.Destroy();
+                }
             }
         }
 
